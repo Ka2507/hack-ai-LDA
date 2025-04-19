@@ -51,4 +51,8 @@ logs/
 /data/chroma/
 
 # Logs
-*.log annual-report-qa/node_modules/
+*.log
+
+# Node modules
+annual-report-qa/node_modules/
+node_modules/ 
