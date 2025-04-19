@@ -1,6 +1,6 @@
 # Annual Report Analyzer
 
-An AI-powered application that enables users to ask natural language questions about annual reports and receive meaningful answers. Built for the LTIMindtree Hackathon Challenge.
+An AI-powered application that enables users to ask natural language questions about annual reports and receive meaningful answers. Built for the AIS HackAI 2025 LTIMindtree Hackathon Challenge.
 
 ## Features
 
@@ -50,4 +50,4 @@ streamlit run src/app.py
 - OpenAI for natural language processing
 - ChromaDB for vector storage
 - Streamlit for web interface
-- PyPDF2 and pdfplumber for PDF processing 
+- PyPDF2 and pdfplumber for PDF processing
