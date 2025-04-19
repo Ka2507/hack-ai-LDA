@@ -1,169 +1,130 @@
 import streamlit as st
-import os
-from pathlib import Path
-from pdf_processor import PDFProcessor
+import fitz
 from vector_store import VectorStore
 from qa_chain import QAChain
-from dotenv import load_dotenv
 import tempfile
-from PIL import Image
-import plotly.express as px
-import pandas as pd
+import os
+from pathlib import Path
 
-# Load environment variables
-load_dotenv()
-
-# Initialize session state
+# Initialize session state variables
 if 'qa_chain' not in st.session_state:
     st.session_state.qa_chain = None
-if 'vector_store' not in st.session_state:
-    st.session_state.vector_store = None
 if 'processed_file' not in st.session_state:
     st.session_state.processed_file = None
-if 'visual_elements' not in st.session_state:
-    st.session_state.visual_elements = None
+if 'chat_history' not in st.session_state:
+    st.session_state.chat_history = []
+if 'sources' not in st.session_state:
+    st.session_state.sources = []
 
 def process_pdf(uploaded_file):
-    """Process the uploaded PDF file."""
-    # Save uploaded file temporarily
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
-        tmp_file.write(uploaded_file.getvalue())
-        tmp_path = tmp_file.name
-
-    # Process the PDF
-    processor = PDFProcessor(tmp_path)
-    text_chunks, tables = processor.extract_text_and_tables()
-    visual_elements = processor.get_visual_elements()
-    
-    # Initialize vector store
-    vector_store = VectorStore()
-    vector_store.create_collection(name="annual_report")
-    
-    # Add documents to vector store
-    vector_store.add_documents(text_chunks, metadata={'source': uploaded_file.name})
-    
-    # Add visual elements to vector store with their analysis
-    visual_docs = []
-    for element in visual_elements:
-        if element['type'] == 'chart':
-            visual_docs.append({
-                'content': element['analysis'],
-                'page': element['page'],
-                'type': 'chart_analysis'
-            })
-    vector_store.add_documents(visual_docs, metadata={'source': uploaded_file.name})
-    
-    # Initialize QA chain
-    qa_chain = QAChain(vector_store)
-    
-    # Update session state
-    st.session_state.qa_chain = qa_chain
-    st.session_state.vector_store = vector_store
-    st.session_state.processed_file = uploaded_file.name
-    st.session_state.visual_elements = visual_elements
-    
-    # Clean up
-    os.unlink(tmp_path)
-    processor.cleanup()
-    
-    return processor.get_metadata()
-
-def display_visual_element(element):
-    """Display a visual element with its analysis."""
     try:
-        image = Image.open(element['image_path'])
-        st.image(image, use_column_width=True)
+        # Create a temporary file to store the uploaded PDF
+        temp_dir = tempfile.mkdtemp()
+        temp_path = Path(temp_dir) / "temp.pdf"
         
-        if element['type'] == 'chart':
-            st.markdown("### Chart Analysis")
-            st.markdown(element['analysis'])
-        elif element['type'] == 'table':
-            st.markdown("### Table Content")
-            st.markdown(f"```\n{element['content']}\n```")
+        # Write the uploaded file to the temporary file
+        with open(temp_path, 'wb') as f:
+            f.write(uploaded_file.getvalue())
+        
+        # Process the PDF and extract text
+        doc = fitz.open(temp_path)
+        text_content = []
+        
+        for page_num in range(len(doc)):
+            page = doc[page_num]
+            text = page.get_text()
+            text_content.append(text)
+        
+        # Create vector store and QA chain
+        vector_store = VectorStore()
+        vector_store.add_texts(text_content)
+        
+        qa_chain = QAChain(vector_store)
+        
+        # Update session state
+        st.session_state.qa_chain = qa_chain
+        st.session_state.processed_file = uploaded_file.name
+        
+        # Clean up
+        doc.close()
+        os.unlink(temp_path)
+        os.rmdir(temp_dir)
+        
+        return True
+        
     except Exception as e:
-        st.error(f"Error displaying visual element: {str(e)}")
+        st.error(f"Error processing PDF: {str(e)}")
+        # Clean up in case of error
+        if 'temp_path' in locals() and os.path.exists(temp_path):
+            os.unlink(temp_path)
+        if 'temp_dir' in locals() and os.path.exists(temp_dir):
+            os.rmdir(temp_dir)
+        return False
 
-# Streamlit UI
-st.set_page_config(
-    page_title="Annual Report Analyzer",
-    page_icon="📊",
-    layout="wide"
-)
-
-st.title("📊 Annual Report Analyzer")
-st.markdown("""
-This application helps you analyze annual reports using AI. Upload a PDF of an annual report
-and ask questions about its contents in natural language. The system can analyze text, tables,
-charts, and other visual elements.
-""")
-
-# File upload
-uploaded_file = st.file_uploader("Upload Annual Report (PDF)", type="pdf")
-
-if uploaded_file:
-    if st.session_state.processed_file != uploaded_file.name:
-        with st.spinner("Processing the annual report... This may take a few minutes."):
-            metadata = process_pdf(uploaded_file)
-            st.success(f"Successfully processed {metadata['total_pages']} pages!")
-
-    # Create tabs for different views
-    tab1, tab2 = st.tabs(["💬 Q&A", "📈 Visual Elements"])
+def main():
+    st.title("PDF Document Analyzer")
     
-    with tab1:
-        # Display chat interface
-        st.markdown("### Ask Questions")
-        question = st.text_input("What would you like to know about the annual report?")
+    # File upload
+    uploaded_file = st.file_uploader("Upload a PDF document", type=['pdf'])
+    
+    if uploaded_file:
+        if st.session_state.processed_file != uploaded_file.name:
+            with st.spinner("Processing document..."):
+                success = process_pdf(uploaded_file)
+                if not success:
+                    st.error("Failed to process the document. Please try again.")
+                    return
         
-        if question:
-            if st.session_state.qa_chain is None:
-                st.error("Please wait for the document to finish processing.")
+        # Create tabs for Q&A, Sources, and Chat History
+        qa_tab, sources_tab, history_tab = st.tabs(["Q&A", "Sources", "Chat History"])
+        
+        with qa_tab:
+            st.subheader("Ask Questions")
+            question = st.text_input("Enter your question about the document:")
+            
+            if question and st.session_state.qa_chain:
+                with st.spinner("Finding answer..."):
+                    try:
+                        # Get answer and context
+                        answer = st.session_state.qa_chain.run(question)
+                        context = st.session_state.qa_chain._get_context(question)
+                        
+                        # Update chat history
+                        st.session_state.chat_history.append({
+                            "question": question,
+                            "answer": answer
+                        })
+                        
+                        # Update sources
+                        st.session_state.sources.append({
+                            "question": question,
+                            "context": context
+                        })
+                        
+                        st.write("Answer:", answer)
+                        
+                    except Exception as e:
+                        st.error(f"Error getting answer: {str(e)}")
+        
+        with sources_tab:
+            st.subheader("Sources")
+            if st.session_state.sources:
+                for i, source in enumerate(st.session_state.sources):
+                    with st.expander(f"Sources for: {source['question']}", expanded=False):
+                        st.text(source['context'])
             else:
-                with st.spinner("Analyzing..."):
-                    response = st.session_state.qa_chain.ask(question)
-                    
-                    # Display answer
-                    st.markdown("#### Answer:")
-                    st.markdown(response['answer'])
-                    
-                    # Display sources
-                    with st.expander("View Sources"):
-                        for idx, source in enumerate(response['source_documents'], 1):
-                            st.markdown(f"**Source {idx}** (Page {source['metadata'].get('page', 'Unknown')})")
-                            st.markdown(source['content'])
-                            st.markdown("---")
+                st.info("No sources available yet. Ask a question to see the sources.")
+        
+        with history_tab:
+            st.subheader("Chat History")
+            if st.session_state.chat_history:
+                for i, chat in enumerate(st.session_state.chat_history):
+                    with st.expander(f"Q: {chat['question']}", expanded=False):
+                        st.write("A:", chat['answer'])
+            else:
+                st.info("No chat history available yet. Start asking questions to build history.")
+    else:
+        st.info("Please upload a PDF document to begin analysis.")
 
-        # Display chat history
-        if st.session_state.qa_chain is not None:
-            with st.expander("View Chat History"):
-                history = st.session_state.qa_chain._format_chat_history()
-                for message in history:
-                    role = "🤖 AI" if message['role'] == 'assistant' else "👤 You"
-                    st.markdown(f"**{role}:** {message['content']}")
-                    st.markdown("---")
-    
-    with tab2:
-        # Display visual elements
-        if st.session_state.visual_elements:
-            st.markdown("### Visual Elements from the Report")
-            
-            # Group elements by page
-            elements_by_page = {}
-            for element in st.session_state.visual_elements:
-                page = element['page']
-                if page not in elements_by_page:
-                    elements_by_page[page] = []
-                elements_by_page[page].append(element)
-            
-            # Display elements page by page
-            for page in sorted(elements_by_page.keys()):
-                with st.expander(f"Page {page}"):
-                    elements = elements_by_page[page]
-                    
-                    # Create columns for visual elements
-                    cols = st.columns(min(len(elements), 2))
-                    for idx, element in enumerate(elements):
-                        with cols[idx % 2]:
-                            display_visual_element(element)
-
-else:
-    st.info("Please upload an annual report to begin analysis.") 
+if __name__ == "__main__":
+    main() 

@@ -1,11 +1,13 @@
 import cv2
 import numpy as np
+import PyPDF2
+from io import BytesIO
 from PIL import Image
 import pytesseract
 from pdf2image import convert_from_path
 import base64
 import io
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Union
 import os
 import json
 from pathlib import Path
@@ -16,177 +18,109 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class MultiModalProcessor:
-    def __init__(self, temp_dir: str = "temp_images"):
-        """Initialize the multimodal processor."""
-        self.temp_dir = Path(temp_dir)
-        self.temp_dir.mkdir(parents=True, exist_ok=True)
-        self.extracted_elements = []
+    def __init__(self, pdf_file):
+        """Initialize the processor with a PDF file."""
+        self.pdf_file = pdf_file
+        # Convert UploadedFile to bytes for PyPDF2
+        if hasattr(pdf_file, 'read'):
+            pdf_bytes = BytesIO(pdf_file.read())
+            self.pdf_reader = PyPDF2.PdfReader(pdf_bytes)
+            # Reset file pointer for future reads
+            pdf_file.seek(0)
+        else:
+            # Handle case where pdf_file is already bytes or a file path
+            self.pdf_reader = PyPDF2.PdfReader(pdf_file)
+            
+        self.min_table_area = 5000  # Minimum area for table detection
+        self.min_figure_area = 3000  # Minimum area for figure detection
+        self.temp_files = []
 
-    def process_page(self, page_image: Image.Image, page_num: int) -> List[Dict[str, Any]]:
-        """Process a single page image to extract visual elements."""
-        # Convert PIL Image to OpenCV format
-        img_cv = cv2.cvtColor(np.array(page_image), cv2.COLOR_RGB2BGR)
+    def process_page(self, image: Union[Image.Image, bytes, np.ndarray], page_num: int) -> Dict[str, Any]:
+        """
+        Process a single page image and extract visual elements.
         
-        # Extract elements
-        elements = []
+        Args:
+            image: PIL Image object, bytes, or numpy array of the page
+            page_num: Page number for reference
+            
+        Returns:
+            Dictionary containing detected elements
+        """
+        # Convert input to OpenCV format
+        if isinstance(image, bytes):
+            # Convert bytes to numpy array
+            nparr = np.frombuffer(image, np.uint8)
+            image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        elif isinstance(image, Image.Image):
+            # Convert PIL Image to numpy array
+            image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+        elif isinstance(image, np.ndarray):
+            # If already numpy array, ensure it's in BGR format
+            if len(image.shape) == 2:  # Grayscale
+                image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+            elif image.shape[2] == 4:  # RGBA
+                image = cv2.cvtColor(image, cv2.COLOR_RGBA2BGR)
+            elif image.shape[2] == 3 and image.dtype == np.uint8:
+                pass  # Already in correct format
+            else:
+                raise ValueError("Unsupported image format")
         
-        # Detect tables using contour detection
-        tables = self._detect_tables(img_cv)
-        elements.extend(self._process_tables(tables, page_num))
+        # Convert to grayscale for processing
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         
-        # Detect charts and graphs
-        charts = self._detect_charts(img_cv)
-        elements.extend(self._process_charts(charts, page_num))
+        # Detect tables using contours
+        table_regions = self._detect_tables(gray)
         
-        # Save the processed elements
-        self.extracted_elements.extend(elements)
+        # Detect figures using edge detection
+        figure_regions = self._detect_figures(gray)
         
-        return elements
+        return {
+            'tables': table_regions,
+            'figures': figure_regions
+        }
 
-    def _detect_tables(self, img: np.ndarray) -> List[np.ndarray]:
-        """Detect table regions in the image."""
-        # Convert to grayscale
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        
-        # Apply threshold
-        _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY_INV)
+    def _detect_tables(self, gray_image: np.ndarray) -> List[Dict[str, int]]:
+        """Detect table regions using contour detection."""
+        # Apply threshold to get binary image
+        _, binary = cv2.threshold(gray_image, 200, 255, cv2.THRESH_BINARY_INV)
         
         # Find contours
-        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        # Filter contours that might be tables
-        tables = []
+        # Filter contours to identify potential tables
+        table_regions = []
         for contour in contours:
-            x, y, w, h = cv2.boundingRect(contour)
-            if w > img.shape[1] * 0.3 and h > img.shape[0] * 0.1:  # Min size threshold
-                tables.append(img[y:y+h, x:x+w])
+            area = cv2.contourArea(contour)
+            if area > self.min_table_area:
+                x, y, w, h = cv2.boundingRect(contour)
+                # Check if the shape is roughly rectangular
+                if 0.5 < w/h < 2.0:
+                    table_regions.append({'x': x, 'y': y, 'width': w, 'height': h})
         
-        return tables
+        return table_regions
 
-    def _detect_charts(self, img: np.ndarray) -> List[np.ndarray]:
-        """Detect chart regions in the image."""
-        # Convert to grayscale
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    def _detect_figures(self, gray_image: np.ndarray) -> List[Dict[str, int]]:
+        """Detect figure regions using edge detection."""
+        # Apply Canny edge detection
+        edges = cv2.Canny(gray_image, 100, 200)
         
-        # Apply edge detection
-        edges = cv2.Canny(gray, 50, 150)
-        
-        # Find contours
+        # Find contours in the edge image
         contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        # Filter contours that might be charts
-        charts = []
+        # Filter contours to identify potential figures
+        figure_regions = []
         for contour in contours:
-            x, y, w, h = cv2.boundingRect(contour)
-            if w > img.shape[1] * 0.2 and h > img.shape[0] * 0.2:  # Min size threshold
-                roi = img[y:y+h, x:x+w]
-                if self._is_likely_chart(roi):
-                    charts.append(roi)
+            area = cv2.contourArea(contour)
+            if area > self.min_figure_area:
+                x, y, w, h = cv2.boundingRect(contour)
+                # Check if the shape has a reasonable aspect ratio
+                if 0.2 < w/h < 5.0:
+                    figure_regions.append({'x': x, 'y': y, 'width': w, 'height': h})
         
-        return charts
-
-    def _is_likely_chart(self, img: np.ndarray) -> bool:
-        """Determine if an image region is likely to be a chart."""
-        # Convert to grayscale
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        
-        # Calculate the number of edges
-        edges = cv2.Canny(gray, 50, 150)
-        edge_pixels = np.count_nonzero(edges)
-        
-        # Calculate edge density
-        total_pixels = img.shape[0] * img.shape[1]
-        edge_density = edge_pixels / total_pixels
-        
-        # If edge density is within a certain range, it's likely a chart
-        return 0.05 < edge_density < 0.5
-
-    def _process_tables(self, tables: List[np.ndarray], page_num: int) -> List[Dict[str, Any]]:
-        """Process detected tables using OCR and structure analysis."""
-        processed_tables = []
-        
-        for idx, table_img in enumerate(tables):
-            # Convert to PIL Image for OCR
-            pil_image = Image.fromarray(cv2.cvtColor(table_img, cv2.COLOR_BGR2RGB))
-            
-            # Extract text using OCR
-            text = pytesseract.image_to_string(pil_image)
-            
-            # Save table image
-            table_path = self.temp_dir / f"table_{page_num}_{idx}.png"
-            cv2.imwrite(str(table_path), table_img)
-            
-            processed_tables.append({
-                'type': 'table',
-                'page': page_num,
-                'content': text,
-                'image_path': str(table_path),
-                'position': idx
-            })
-        
-        return processed_tables
-
-    def _process_charts(self, charts: List[np.ndarray], page_num: int) -> List[Dict[str, Any]]:
-        """Process detected charts and analyze them using GPT-4 Vision."""
-        processed_charts = []
-        
-        for idx, chart_img in enumerate(charts):
-            # Save chart image
-            chart_path = self.temp_dir / f"chart_{page_num}_{idx}.png"
-            cv2.imwrite(str(chart_path), chart_img)
-            
-            # Convert image to base64 for GPT-4 Vision
-            _, buffer = cv2.imencode('.png', chart_img)
-            base64_image = base64.b64encode(buffer).decode('utf-8')
-            
-            # Analyze chart using GPT-4 Vision
-            try:
-                analysis = self._analyze_chart_with_gpt4(base64_image)
-            except Exception as e:
-                analysis = f"Error analyzing chart: {str(e)}"
-            
-            processed_charts.append({
-                'type': 'chart',
-                'page': page_num,
-                'analysis': analysis,
-                'image_path': str(chart_path),
-                'position': idx
-            })
-        
-        return processed_charts
-
-    def _analyze_chart_with_gpt4(self, base64_image: str) -> str:
-        """Analyze a chart using GPT-4 Vision API."""
-        try:
-            response = openai.ChatCompletion.create(
-                model="gpt-4-vision-preview",
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "Analyze this chart from an annual report. Describe its type, key trends, and main insights. Focus on financial implications."
-                            },
-                            {
-                                "type": "image_url",
-                                "image_url": f"data:image/png;base64,{base64_image}"
-                            }
-                        ]
-                    }
-                ],
-                max_tokens=300
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            return f"Error analyzing chart: {str(e)}"
-
-    def get_extracted_elements(self) -> List[Dict[str, Any]]:
-        """Get all extracted visual elements."""
-        return self.extracted_elements
+        return figure_regions
 
     def cleanup(self):
-        """Clean up temporary files."""
-        for file in self.temp_dir.glob("*"):
-            file.unlink()
-        self.temp_dir.rmdir() 
+        """Clean up any temporary files."""
+        for temp_file in self.temp_files:
+            if os.path.exists(temp_file):
+                os.remove(temp_file) 
