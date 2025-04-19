@@ -1,32 +1,11 @@
-# Node modules
+# Node.js
 node_modules/
-*/node_modules/
 annual-report-qa/node_modules/
-
-# Next.js
 .next/
-out/
-
-# Environment variables
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-
-# Debug logs
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-
-# OS generated files
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
 
 # Python
 __pycache__/
@@ -34,6 +13,7 @@ __pycache__/
 *$py.class
 *.so
 .Python
+env/
 build/
 develop-eggs/
 dist/
@@ -45,16 +25,16 @@ lib64/
 parts/
 sdist/
 var/
-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
 
-# Virtual Environment
-venv/
-ENV/
-env/
-.env/
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
 
 # IDE
 .idea/
@@ -62,14 +42,30 @@ env/
 *.swp
 *.swo
 
-# Jupyter Notebook
-.ipynb_checkpoints
+# OS
+.DS_Store
+Thumbs.db
 
 # Project specific
 data/
 *.pdf
-logs/
-.DS_Store
+
+# OS generated files
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Virtual Environment
+venv/
+ENV/
+env/
+.env/
+
+# Jupyter Notebook
+.ipynb_checkpoints
 
 # ChromaDB
 .chroma/
@@ -79,8 +75,4 @@ logs/
 /data/chroma/
 
 # Logs
-*.log
-
-# Node modules
-annual-report-qa/node_modules/
-node_modules/ 
+*.log 
