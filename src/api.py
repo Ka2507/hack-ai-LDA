@@ -5,6 +5,7 @@ import os
 from typing import Dict, Any, List
 from vector_store import VectorStore
 from qa_chain import QAChain
+from pypdf import PdfReader
 
 app = FastAPI()
 
@@ -36,12 +37,31 @@ async def upload_file(file: UploadFile):
             temp_file.write(content)
             temp_file.flush()
             
+            # Correct PDF Text Extraction
+            text_content = ""
+            try:
+                reader = PdfReader(temp_file.name)
+                for page in reader.pages:
+                    page_text = page.extract_text()
+                    if page_text:  # Ensure text was extracted
+                        text_content += page_text + "\n"  # Add text and newline
+            except Exception as pdf_error:
+                # Clean up temp file even if PDF processing fails
+                os.unlink(temp_file.name)
+                raise HTTPException(status_code=400, detail=f"Failed to parse PDF: {pdf_error}")
+            # -------------------------------------
+
+            if not text_content:  # Check if any text was extracted
+                os.unlink(temp_file.name)
+                raise HTTPException(status_code=400, detail="Could not extract text from the PDF.")
+            
             # Initialize VectorStore and process the PDF
             vector_store = VectorStore()
             vector_store.create_collection()
             
-            # Add text to vector store
-            text_content = content.decode('utf-8', errors='ignore')
+            # Add *extracted* text to vector store
+            # Consider splitting the text_content into smaller chunks here for better retrieval
+            # For simplicity, adding the whole text for now
             vector_store.add_texts([text_content], [{"source": file.filename}])
             
             # Add to vector stores list
@@ -60,6 +80,9 @@ async def upload_file(file: UploadFile):
             }
             
     except Exception as e:
+        # Catch potential HTTPExceptions raised earlier
+        if isinstance(e, HTTPException):
+            raise e 
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/reset")
