@@ -134,52 +134,58 @@ with active_tabs[0]:
             st.warning("⚠️ The answer indicates it might be based on limited information found in the document.")
         # --------------------------------------------------------
         st.write("---")
-    
-    question = st.text_input("Enter your question:", key="qa_input", placeholder=f"Ask in {st.session_state.chat_mode} mode...")
 
-    if question: # If user entered a question
-        api_url = None
-        payload = None
-        proceed = True
+    # --- Use st.form for input and submission --- 
+    with st.form(key='qa_form'):
+        question_input = st.text_input(
+            "Enter your question:", 
+            key="qa_input_field", # Use a distinct key for the widget itself
+            placeholder=f"Ask in {st.session_state.chat_mode} mode..."
+        )
+        submitted = st.form_submit_button("Ask")
 
-        # Determine API URL and payload based on mode and state
-        if st.session_state.chat_mode == "Analyze Reports":
-            if not st.session_state.processed_files:
-                st.warning("Please upload at least one PDF file in 'Analyze Reports' mode before asking questions.")
-                proceed = False
+        if submitted:
+            # Retrieve the actual question from the input field state
+            question = question_input 
+            
+            if not question.strip(): # Check if input is empty or just whitespace
+                st.warning("Please enter a question.")
             else:
-                api_url = "http://localhost:8501/api/question"
-                payload = {"question": question}
-        else: # General Chat mode
-            api_url = "http://localhost:8501/api/general_chat"
-            payload = {"question": question}
+                # --- Logic moved inside form submission check --- 
+                api_url = None
+                payload = None
+                proceed = True
 
-        # Proceed if conditions met
-        if proceed and api_url and payload:
-            try:
-                # Make the API call
-                response = requests.post(api_url, json=payload)
-
-                # --- Process response --- 
-                if response.status_code == 200: 
-                    response_data = response.json()
-                    answer = response_data.get("answer", "Error: Could not parse answer.")
-                    # Store history
-                    st.session_state.chat_history.append({"question": question, "answer": answer})
-                    # Store sources IF in RAG mode
-                    if st.session_state.chat_mode == "Analyze Reports":
-                        st.session_state.last_rag_sources = response_data.get("sources", [])
+                if st.session_state.chat_mode == "Analyze Reports":
+                    if not st.session_state.processed_files:
+                        st.warning("Please upload at least one PDF file in 'Analyze Reports' mode before asking questions.")
+                        proceed = False
                     else:
-                        st.session_state.last_rag_sources = [] # Clear sources if switching from RAG
-                    st.rerun()
-                else:
-                    st.error(f"Error from API: {response.json().get('detail', 'Unknown error')} (Status code: {response.status_code})")
-                # -------------------------------------------------------------------
+                        api_url = "http://localhost:8501/api/question"
+                        payload = {"question": question}
+                else: # General Chat mode
+                    api_url = "http://localhost:8501/api/general_chat"
+                    payload = {"question": question}
 
-            except requests.exceptions.RequestException as e:
-                 st.error(f"Connection error: Failed to connect to the backend API. Is it running? ({e})")
-            except Exception as e:
-                st.error(f"An unexpected error occurred: {str(e)}")
+                if proceed and api_url and payload:
+                    try:
+                        response = requests.post(api_url, json=payload)
+                        if response.status_code == 200:
+                            response_data = response.json()
+                            answer = response_data.get("answer", "Error: Could not parse answer.")
+                            st.session_state.chat_history.append({"question": question, "answer": answer})
+                            if st.session_state.chat_mode == "Analyze Reports":
+                                st.session_state.last_rag_sources = response_data.get("sources", [])
+                            else:
+                                st.session_state.last_rag_sources = [] 
+                            # Form submission handles rerun, no explicit call needed
+                        else:
+                            st.error(f"Error from API: {response.json().get('detail', 'Unknown error')} (Status code: {response.status_code})")
+                    except requests.exceptions.RequestException as e:
+                         st.error(f"Connection error: Failed to connect to the backend API. Is it running? ({e})")
+                    except Exception as e:
+                        st.error(f"An unexpected error occurred: {str(e)}")
+                # --- End of logic moved inside form --- 
 
 # --- Sources Tab (Conditional & Updated) --- 
 if st.session_state.chat_mode == "Analyze Reports":
