@@ -15,6 +15,8 @@ if 'chat_history' not in st.session_state:
     st.session_state.chat_history = []
 if 'sources' not in st.session_state:
     st.session_state.sources = []
+if 'current_conversation' not in st.session_state:
+    st.session_state.current_conversation = []
 
 def process_pdf(uploaded_file):
     try:
@@ -44,6 +46,7 @@ def process_pdf(uploaded_file):
         # Update session state
         st.session_state.qa_chain = qa_chain
         st.session_state.processed_file = uploaded_file.name
+        st.session_state.current_conversation = []  # Reset conversation when new file is uploaded
         
         # Clean up
         doc.close()
@@ -80,14 +83,27 @@ def main():
         
         with qa_tab:
             st.subheader("Ask Questions")
+            
+            # Display current conversation
+            if st.session_state.current_conversation:
+                st.write("Current Conversation:")
+                for i, (q, a) in enumerate(st.session_state.current_conversation):
+                    st.write(f"Q{i+1}: {q}")
+                    st.write(f"A{i+1}: {a}")
+                st.write("---")
+            
             question = st.text_input("Enter your question about the document:")
             
             if question and st.session_state.qa_chain:
                 with st.spinner("Finding answer..."):
                     try:
                         # Get answer and context
-                        answer = st.session_state.qa_chain.run(question)
+                        is_follow_up = len(st.session_state.current_conversation) > 0
+                        answer = st.session_state.qa_chain.run(question, is_follow_up)
                         context = st.session_state.qa_chain._get_context(question)
+                        
+                        # Update conversation history
+                        st.session_state.current_conversation.append((question, answer))
                         
                         # Update chat history
                         st.session_state.chat_history.append({

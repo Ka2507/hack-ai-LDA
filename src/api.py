@@ -62,10 +62,12 @@ async def ask_question(request: Dict[str, Any]):
         
     try:
         question = request.get("question")
+        is_follow_up = request.get("is_follow_up", False)
+        
         if not question:
             raise HTTPException(status_code=400, detail="Question is required")
             
-        result = qa_chain.ask(question)
+        result = qa_chain.run(question, is_follow_up)
         # Extract just the answer string from the result
         if isinstance(result, dict):
             answer = result.get('answer', str(result))
