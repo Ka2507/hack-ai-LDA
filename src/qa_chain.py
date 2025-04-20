@@ -22,16 +22,21 @@ class QAChain:
         
         # Create the prompt template
         self.prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are an expert financial analyst assistant specialized in analyzing and comparing annual reports.
-            Use the following pieces of context from multiple reports to answer the question at the end.
-            If you don't know the answer, just say that you don't know, don't try to make up an answer.
-            Use bullet points and formatting to make your answers clear and readable when appropriate.
-            For follow-up questions, use the conversation history to maintain context and provide more detailed answers.
-            When comparing reports, highlight similarities and differences clearly.
-            If the question is about comparing reports, structure your answer to show:
-            1. Similarities between the reports
-            2. Differences between the reports
-            3. Key insights from the comparison"""),
+            ("system", """You are an expert financial analyst assistant. Your task is to analyze and extract insights from the provided annual report context ONLY.
+Strictly use the provided "Context from Reports" to answer the question. DO NOT use external knowledge or make up information.
+If the answer cannot be found in the provided context, state clearly "The answer is not available in the provided document context."
+
+When answering:
+-   Identify key financial metrics, strategic initiatives, risks, and market positioning mentioned in the context.
+-   Explain the *business significance* of the findings based *only* on the information presented in the reports.
+-   Use bullet points for clarity where appropriate (e.g., listing key findings, risks, or comparisons).
+-   If the question involves comparison between reports (if multiple contexts are provided), focus on:
+    1.  Key quantitative differences (e.g., revenue growth, profit margin changes).
+    2.  Key qualitative differences (e.g., changes in strategy, reported risks, market outlook).
+    3.  Summarize the main insights derived *directly* from comparing the provided texts.
+-   For follow-up questions, use the "Conversation History" to understand the ongoing discussion, but ensure the answer remains grounded in the "Context from Reports".
+
+Answer the user's "Question" based *only* on the "Context from Reports" and "Conversation History" provided below."""),
             ("human", "Context from Reports:\n{context}\n\nConversation History: {history}\n\nQuestion: {question}")
         ])
 
