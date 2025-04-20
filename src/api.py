@@ -2,10 +2,17 @@ from fastapi import FastAPI, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import tempfile
 import os
+import shutil # Import shutil for directory removal
 from typing import Dict, Any, List
 from vector_store import VectorStore
 from qa_chain import QAChain
 from pypdf import PdfReader
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage
+from dotenv import load_dotenv
+
+# Load environment variables (needed for general chat key too)
+load_dotenv()
 
 app = FastAPI()
 
@@ -28,6 +35,18 @@ async def upload_file(file: UploadFile):
     global vector_stores, qa_chain
     
     try:
+        # --- Safeguard Reset for First Upload --- 
+        if not vector_stores: # If this is the first file after a potential reset
+            persist_dir = "data/chroma" 
+            if os.path.exists(persist_dir):
+                try:
+                    print(f"First upload detected, ensuring {persist_dir} is cleared.")
+                    shutil.rmtree(persist_dir)
+                except Exception as e:
+                    print(f"Error clearing {persist_dir} before first upload: {e}")
+                    raise HTTPException(status_code=500, detail="Failed to clear old storage before upload.")
+        # --------------------------------------
+
         if len(vector_stores) >= MAX_REPORTS:
             raise HTTPException(status_code=400, detail=f"Maximum number of reports ({MAX_REPORTS}) reached")
             
@@ -88,8 +107,23 @@ async def upload_file(file: UploadFile):
 @app.post("/api/reset")
 async def reset_reports():
     global vector_stores, qa_chain
+    
+    # Reset in-memory state
     vector_stores = []
     qa_chain = None
+    
+    # --- Delete persistent ChromaDB data --- 
+    persist_dir = "data/chroma" # Assuming default from VectorStore
+    if os.path.exists(persist_dir):
+        try:
+            shutil.rmtree(persist_dir)
+            print(f"Successfully deleted persistent storage: {persist_dir}")
+        except Exception as e:
+            print(f"Error deleting persistent storage {persist_dir}: {e}")
+            # Decide if this should be a user-facing error or just logged
+            # raise HTTPException(status_code=500, detail="Failed to fully reset storage.")
+    # --------------------------------------
+    
     return {"message": "Reports reset successfully"}
 
 @app.post("/api/question")
@@ -117,6 +151,36 @@ async def ask_question(request: Dict[str, Any]):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# --- New Endpoint for General Chat --- 
+@app.post("/api/general_chat")
+async def general_chat(request: Dict[str, Any]):
+    try:
+        question = request.get("question")
+        if not question:
+            raise HTTPException(status_code=400, detail="Question is required")
+            
+        # Initialize a separate LLM client for general chat
+        # (Could potentially reuse/refactor later)
+        general_llm = ChatOpenAI(
+            model_name="gpt-3.5-turbo", 
+            temperature=0.7, 
+            max_tokens=1000
+        )
+        
+        # Simple invocation with just the human question
+        # No RAG context or specific system prompt is used here
+        response = general_llm.invoke([HumanMessage(content=question)])
+        
+        return {"answer": response.content}
+        
+    except Exception as e:
+        # Handle potential OpenAI errors (like rate limits) gracefully
+        error_msg = str(e)
+        if "rate_limit_exceeded" in error_msg:
+             raise HTTPException(status_code=429, detail="General chat limit reached. Please try again later.")
+        raise HTTPException(status_code=500, detail=f"Error in general chat: {error_msg}")
+# ------------------------------------
 
 if __name__ == "__main__":
     import uvicorn
