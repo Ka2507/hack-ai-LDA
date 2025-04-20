@@ -15,8 +15,8 @@ if 'chat_history' not in st.session_state: # Combined history for both modes
     st.session_state.chat_history = []
 if 'sources' not in st.session_state: # Sources only relevant for RAG mode
     st.session_state.sources = []
-# if 'current_conversation' not in st.session_state: # Let's simplify and just use chat_history
-#     st.session_state.current_conversation = [] 
+if 'last_rag_sources' not in st.session_state: # Store sources for the last RAG Q
+    st.session_state.last_rag_sources = []
 if 'max_reports' not in st.session_state:
     st.session_state.max_reports = 3
 if 'chat_mode' not in st.session_state: # Add state for chat mode
@@ -61,7 +61,7 @@ def reset_reports():
             st.session_state.processed_files = []
             st.session_state.chat_history = [] # Clear frontend history too
             st.session_state.sources = []
-            # st.session_state.current_conversation = []
+            st.session_state.last_rag_sources = [] # Clear sources on reset
             st.success("Reports and chat history reset successfully!")
             st.rerun() # Rerun to clear UI elements
         else:
@@ -122,6 +122,17 @@ with active_tabs[0]:
     for exchange in st.session_state.chat_history:
         st.write(f"**Q:** {exchange['question']}")
         st.write(f"**A:** {exchange['answer']}")
+        # --- Add Hallucination Warning (Implementation Step 3) --- 
+        uncertainty_phrases = [
+            "not available in the provided document context",
+            "do not have information",
+            "cannot find details",
+            "based on the provided context",
+            "insufficient information"
+        ]
+        if any(phrase in exchange['answer'].lower() for phrase in uncertainty_phrases):
+            st.warning("⚠️ The answer indicates it might be based on limited information found in the document.")
+        # --------------------------------------------------------
         st.write("---")
     
     question = st.text_input("Enter your question:", key="qa_input", placeholder=f"Ask in {st.session_state.chat_mode} mode...")
@@ -138,7 +149,7 @@ with active_tabs[0]:
                 proceed = False
             else:
                 api_url = "http://localhost:8501/api/question"
-                payload = {"question": question, "is_follow_up": len(st.session_state.chat_history) > 0}
+                payload = {"question": question}
         else: # General Chat mode
             api_url = "http://localhost:8501/api/general_chat"
             payload = {"question": question}
@@ -151,9 +162,16 @@ with active_tabs[0]:
 
                 # --- Process response --- 
                 if response.status_code == 200: 
-                    answer = response.json()["answer"]
-                    # Appending to history automatically triggers a rerun
+                    response_data = response.json()
+                    answer = response_data.get("answer", "Error: Could not parse answer.")
+                    # Store history
                     st.session_state.chat_history.append({"question": question, "answer": answer})
+                    # Store sources IF in RAG mode
+                    if st.session_state.chat_mode == "Analyze Reports":
+                        st.session_state.last_rag_sources = response_data.get("sources", [])
+                    else:
+                        st.session_state.last_rag_sources = [] # Clear sources if switching from RAG
+                    st.rerun()
                 else:
                     st.error(f"Error from API: {response.json().get('detail', 'Unknown error')} (Status code: {response.status_code})")
                 # -------------------------------------------------------------------
@@ -163,12 +181,26 @@ with active_tabs[0]:
             except Exception as e:
                 st.error(f"An unexpected error occurred: {str(e)}")
 
-# --- Sources Tab (Conditional) --- 
+# --- Sources Tab (Conditional & Updated) --- 
 if st.session_state.chat_mode == "Analyze Reports":
     with active_tabs[1]: 
-        st.subheader("Sources")
-        st.info("Source tracking not fully implemented in this version.") 
-        # Placeholder for future source display logic
+        st.subheader("Sources for Last Question")
+        if st.session_state.last_rag_sources:
+            for i, source in enumerate(st.session_state.last_rag_sources):
+                try:
+                    # Extract metadata safely with defaults
+                    metadata = source.get("metadata", {})
+                    source_file = metadata.get("source", "Unknown File")
+                    chunk_num = metadata.get("chunk", "N/A")
+                    page_content = source.get("page_content", "N/A")
+                    
+                    # Display source info
+                    with st.expander(f"Source Chunk {i+1} (from {source_file}, chunk {chunk_num})", expanded=False):
+                        st.text(page_content)
+                except Exception as display_error:
+                    st.error(f"Error displaying source {i+1}: {display_error}")
+        else:
+            st.info("Ask a question in 'Analyze Reports' mode to see the sources used for the answer here.")
 
 # --- Chat History Tab --- 
 history_tab_index = 2 if st.session_state.chat_mode == "Analyze Reports" else 1

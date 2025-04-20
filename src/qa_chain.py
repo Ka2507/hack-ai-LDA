@@ -1,28 +1,17 @@
 from langchain_openai import ChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate
+# from langchain_core.prompts import ChatPromptTemplate # No longer needed directly here
+from langchain.chains import RetrievalQA # Import RetrievalQA chain
+from langchain.prompts import PromptTemplate # Import standard PromptTemplate
 from dotenv import load_dotenv
 from typing import List, Dict, Any
-import tiktoken
+# import tiktoken # No longer needed directly here
 
 # Load environment variables
 load_dotenv()
 
-class QAChain:
-    def __init__(self, vector_stores: List[Any]):
-        """Initialize the QA chain with multiple vector stores."""
-        self.vector_stores = vector_stores
-        self.conversation_history: List[Dict[str, str]] = []
-        
-        # Initialize the language model
-        self.llm = ChatOpenAI(
-            model_name="gpt-3.5-turbo",
-            temperature=0.7,
-            max_tokens=1000  # Limit response length
-        )
-        
-        # Create the prompt template
-        self.prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are an expert financial analyst assistant. Your task is to analyze and extract insights from the provided annual report context ONLY.
+# --- Define the Prompt Template --- 
+# Moved outside the class for clarity
+prompt_template = """You are an expert financial analyst assistant. Your task is to analyze and extract insights from the provided annual report context ONLY.
 Strictly use the provided "Context from Reports" to answer the question. DO NOT use external knowledge or make up information.
 If the answer cannot be found in the provided context, state clearly "The answer is not available in the provided document context."
 
@@ -34,94 +23,74 @@ When answering:
     1.  Key quantitative differences (e.g., revenue growth, profit margin changes).
     2.  Key qualitative differences (e.g., changes in strategy, reported risks, market outlook).
     3.  Summarize the main insights derived *directly* from comparing the provided texts.
--   For follow-up questions, use the "Conversation History" to understand the ongoing discussion, but ensure the answer remains grounded in the "Context from Reports".
 
-Answer the user's "Question" based *only* on the "Context from Reports" and "Conversation History" provided below."""),
-            ("human", "Context from Reports:\n{context}\n\nConversation History: {history}\n\nQuestion: {question}")
-        ])
+CONTEXT:
+{context}
 
-    def _get_context(self, question: str) -> str:
-        """Get relevant context from all reports for the question."""
-        try:
-            all_contexts = []
-            for i, vector_store in enumerate(self.vector_stores, 1):
-                docs = vector_store.get_retriever().get_relevant_documents(question)
-                # Limit the number of documents to reduce token usage
-                docs = docs[:3]  # Only use top 3 most relevant documents
-                report_context = "\n\n".join(str(doc.page_content) for doc in docs)
-                if report_context:
-                    all_contexts.append(f"Report {i}:\n{report_context}")
-            return "\n\n---\n\n".join(all_contexts)
-        except Exception as e:
-            print(f"Error getting context: {str(e)}")
-            return ""
+QUESTION: {question}
 
-    def _format_history(self) -> str:
-        """Format the conversation history for the prompt."""
-        if not self.conversation_history:
-            return "No previous conversation."
+ANSWER:"""
+QA_PROMPT = PromptTemplate(
+    template=prompt_template, input_variables=["context", "question"]
+)
+# --------------------------------
+
+class QAChain:
+    def __init__(self, vector_stores: List[Any]):
+        """Initialize the QA chain with multiple vector stores."""
+        # NOTE: Using only the *first* vector store for simplicity with RetrievalQA
+        # A more complex setup could combine retrievers if needed.
+        if not vector_stores:
+            raise ValueError("At least one vector store must be provided.")
+        self.vector_store = vector_stores[0] # Use the first store
+        # self.conversation_history: List[Dict[str, str]] = [] # History managed by caller now
         
-        # Only keep the last 3 exchanges to limit token usage
-        recent_history = self.conversation_history[-3:]
-        formatted_history = []
-        for i, exchange in enumerate(recent_history, 1):
-            formatted_history.append(f"Q{i}: {exchange['question']}")
-            formatted_history.append(f"A{i}: {exchange['answer']}")
+        # Initialize the language model
+        self.llm = ChatOpenAI(
+            model_name="gpt-3.5-turbo",
+            temperature=0.1, # Lower temperature for more factual answers
+            max_tokens=1000
+        )
         
-        return "\n".join(formatted_history)
+        # --- Create RetrievalQA Chain --- 
+        self.qa_chain = RetrievalQA.from_chain_type(
+            llm=self.llm,
+            chain_type="stuff", # Uses all retrieved docs in context
+            retriever=self.vector_store.get_retriever(search_kwargs={"k": 4}), # Retrieve top 4 chunks
+            return_source_documents=True, # <<< Key change to return sources
+            chain_type_kwargs={"prompt": QA_PROMPT}
+        )
+        # ------------------------------
 
-    def _count_tokens(self, text: str) -> int:
-        """Count the number of tokens in a text string."""
-        encoding = tiktoken.encoding_for_model("gpt-3.5-turbo")
-        return len(encoding.encode(text))
+    # Removed _get_context, _format_history, _count_tokens as RetrievalQA handles retrieval and prompting
 
-    def run(self, question: str, is_follow_up: bool = False) -> str:
+    def run(self, question: str) -> Dict[str, Any]: # Modified to return dict
         """
-        Ask a question about the annual reports.
+        Ask a question using the RetrievalQA chain.
         
         Args:
             question: The question to ask
-            is_follow_up: Whether this is a follow-up question
             
         Returns:
-            The answer as a string
+            A dictionary containing the 'answer' and 'source_documents'
         """
         try:
-            # Get the context from all reports
-            context = self._get_context(question)
+            # Invoke the RetrievalQA chain
+            # It handles retrieving context based on the question and formatting the prompt
+            result = self.qa_chain.invoke({"query": question})
             
-            # Format the conversation history
-            history = self._format_history()
-            
-            # Check token count and limit if necessary
-            total_tokens = self._count_tokens(context) + self._count_tokens(history) + self._count_tokens(question)
-            if total_tokens > 15000:  # Limit total tokens to avoid rate limits
-                context = context[:10000]  # Truncate context if too long
-            
-            # Create the chain for this specific question
-            chain = self.prompt | self.llm
-            
-            # Get the answer
-            response = chain.invoke({
-                "context": context,
-                "history": history,
-                "question": question
-            })
-            
-            # Store the question and answer in conversation history
-            self.conversation_history.append({
-                "question": question,
-                "answer": response.content
-            })
-            
-            return response.content
+            # Prepare the output dictionary
+            output = {
+                "answer": result.get("result", "Error: Could not parse answer from chain."),
+                "source_documents": result.get("source_documents", [])
+            }
+            return output
             
         except Exception as e:
             error_msg = str(e)
-            if "rate_limit_exceeded" in error_msg:
-                return "I apologize, but I'm currently experiencing high demand. Please try again in a few moments."
-            elif "Request too large" in error_msg:
-                return "I apologize, but the question requires processing too much information. Please try asking a more specific question or break it down into smaller parts."
-            else:
-                print(f"Error in run method: {error_msg}")
-                return "I apologize, but I encountered an error while processing your question. Please try again." 
+            print(f"Error in QAChain run method: {error_msg}")
+            # Return error information in the expected dictionary format
+            return {
+                 "answer": f"I apologize, but I encountered an error: {error_msg}",
+                 "source_documents": []
+            } 

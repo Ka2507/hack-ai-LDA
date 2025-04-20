@@ -148,22 +148,35 @@ async def ask_question(request: Dict[str, Any]):
         
     try:
         question = request.get("question")
-        is_follow_up = request.get("is_follow_up", False)
+        # is_follow_up is no longer used by the refactored QAChain
+        # is_follow_up = request.get("is_follow_up", False) 
         
         if not question:
             raise HTTPException(status_code=400, detail="Question is required")
             
-        result = qa_chain.run(question, is_follow_up)
-        # Extract just the answer string from the result
-        if isinstance(result, dict):
-            answer = result.get('answer', str(result))
-        else:
-            answer = str(result)
+        # Call the refactored run method which returns a dict
+        result_dict = qa_chain.run(question)
+
+        # --- Serialize Source Documents --- 
+        # Convert LangChain Document objects to serializable dicts
+        sources_serializable = []
+        if result_dict.get("source_documents"):
+            for doc in result_dict["source_documents"]:
+                sources_serializable.append({
+                    "page_content": doc.page_content,
+                    "metadata": doc.metadata
+                })
+        # ---------------------------------
             
-        return {"answer": answer}
+        # Return answer and serialized sources
+        return {
+            "answer": result_dict.get("answer", "Error: Missing answer"), 
+            "sources": sources_serializable
+            }
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # Catch potential errors during chain execution
+        raise HTTPException(status_code=500, detail=f"Error processing question: {str(e)}")
 
 # --- New Endpoint for General Chat --- 
 @app.post("/api/general_chat")
