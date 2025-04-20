@@ -10,6 +10,7 @@ from pypdf import PdfReader
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
 from dotenv import load_dotenv
+from langchain.text_splitter import RecursiveCharacterTextSplitter # Added text splitter
 
 # Load environment variables (needed for general chat key too)
 load_dotenv()
@@ -60,7 +61,7 @@ async def upload_file(file: UploadFile):
             text_content = ""
             try:
                 reader = PdfReader(temp_file.name)
-                for page in reader.pages:
+                for page_num, page in enumerate(reader.pages):
                     page_text = page.extract_text()
                     if page_text:  # Ensure text was extracted
                         text_content += page_text + "\n"  # Add text and newline
@@ -74,14 +75,26 @@ async def upload_file(file: UploadFile):
                 os.unlink(temp_file.name)
                 raise HTTPException(status_code=400, detail="Could not extract text from the PDF.")
             
+            # Text Splitting
+            text_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=1000, # Adjust size as needed
+                chunk_overlap=200, # Adjust overlap as needed
+                length_function=len,
+            )
+            chunks = text_splitter.split_text(text_content)
+            if not chunks:
+                os.unlink(temp_file.name)
+                raise HTTPException(status_code=400, detail="Failed to split extracted text into chunks.")
+            print(f"Split PDF into {len(chunks)} chunks.") # Log chunk count
+            # ----------------------
+            
             # Initialize VectorStore and process the PDF
             vector_store = VectorStore()
             vector_store.create_collection()
             
             # Add *extracted* text to vector store
-            # Consider splitting the text_content into smaller chunks here for better retrieval
-            # For simplicity, adding the whole text for now
-            vector_store.add_texts([text_content], [{"source": file.filename}])
+            metadatas = [{"source": file.filename, "chunk": i} for i in range(len(chunks))]
+            vector_store.add_texts(texts=chunks, metadatas=metadatas)
             
             # Add to vector stores list
             vector_stores.append(vector_store)
